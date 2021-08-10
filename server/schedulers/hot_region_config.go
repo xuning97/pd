@@ -30,6 +30,12 @@ import (
 	"github.com/unrolled/render"
 )
 
+const (
+	// Scheduling has a bigger impact on TiFlash, so it needs to be corrected in configuration items
+	// In the default config, the TiKV difference is 1.05*1.05-1 = 0.1025, and the TiFlash difference is 1.15*1.15-1 = 0.3225
+	tiflashToleranceRatioCorrection = 0.1
+)
+
 // params about hot region.
 func initHotRegionScheduleConfig() *hotRegionSchedulerConfig {
 	return &hotRegionSchedulerConfig{
@@ -44,6 +50,7 @@ func initHotRegionScheduleConfig() *hotRegionSchedulerConfig {
 		MinorDecRatio:         0.99,
 		SrcToleranceRatio:     1.05, // Tolerate 5% difference
 		DstToleranceRatio:     1.05, // Tolerate 5% difference
+		EnableForTiFlash:      true,
 	}
 }
 
@@ -65,6 +72,9 @@ type hotRegionSchedulerConfig struct {
 	MinorDecRatio         float64 `json:"minor-dec-ratio"`
 	SrcToleranceRatio     float64 `json:"src-tolerance-ratio"`
 	DstToleranceRatio     float64 `json:"dst-tolerance-ratio"`
+
+	// Separately control whether to start hotspot scheduling for TiFlash
+	EnableForTiFlash bool `json:"enable-for-tiflash,string"`
 }
 
 func (conf *hotRegionSchedulerConfig) EncodeConfig() ([]byte, error) {
@@ -155,6 +165,18 @@ func (conf *hotRegionSchedulerConfig) GetMinHotByteRate() float64 {
 	conf.RLock()
 	defer conf.RUnlock()
 	return conf.MinHotByteRate
+}
+
+func (conf *hotRegionSchedulerConfig) GetEnableForTiFlash() bool {
+	conf.RLock()
+	defer conf.RUnlock()
+	return conf.EnableForTiFlash
+}
+
+func (conf *hotRegionSchedulerConfig) SetEnableForTiFlash(enable bool) {
+	conf.RLock()
+	defer conf.RUnlock()
+	conf.EnableForTiFlash = enable
 }
 
 func (conf *hotRegionSchedulerConfig) ServeHTTP(w http.ResponseWriter, r *http.Request) {
