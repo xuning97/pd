@@ -176,31 +176,20 @@ func (infl Influence) add(rhs *Influence, w float64) Influence {
 
 // TODO: merge it into OperatorInfluence.
 type pendingInfluence struct {
-	op       *operator.Operator
-	from, to uint64
-	origin   Influence
+	op                *operator.Operator
+	from, to          uint64
+	origin            Influence
+	maxZombieDuration time.Duration
 }
 
-func newPendingInfluence(op *operator.Operator, from, to uint64, infl Influence) *pendingInfluence {
+func newPendingInfluence(op *operator.Operator, from, to uint64, infl Influence, maxZombieDur time.Duration) *pendingInfluence {
 	return &pendingInfluence{
-		op:     op,
-		from:   from,
-		to:     to,
-		origin: infl,
+		op:                op,
+		from:              from,
+		to:                to,
+		origin:            infl,
+		maxZombieDuration: maxZombieDur,
 	}
-}
-
-func summaryPendingInfluence(pendings map[*pendingInfluence]struct{}, f func(*operator.Operator) float64) map[uint64]Influence {
-	ret := map[uint64]Influence{}
-	for p := range pendings {
-		w := f(p.op)
-		if w == 0 {
-			delete(pendings, p)
-		}
-		ret[p.to] = ret[p.to].add(&p.origin, w)
-		ret[p.from] = ret[p.from].add(&p.origin, -w)
-	}
-	return ret
 }
 
 type storeLoad struct {
