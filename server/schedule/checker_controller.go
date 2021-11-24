@@ -93,3 +93,8 @@ func (c *CheckerController) CheckRegion(region *core.RegionInfo) (bool, []*opera
 func (c *CheckerController) GetMergeChecker() *checker.MergeChecker {
 	return c.mergeChecker
 }
+
+// GetReplicaChecker returns the replica checker.
+func (c *CheckerController) GetReplicaChecker() *checker.ReplicaChecker {
+	return c.replicaChecker
+}

@@ -220,7 +220,8 @@ func (pl PromoteLearner) Influence(opInfluence OpInfluence, region *core.RegionI
 
 // RemovePeer is an OpStep that removes a region peer.
 type RemovePeer struct {
-	FromStore uint64
+	FromStore   uint64
+	IsDownStore bool
 }
 
 // ConfVerChanged returns true if the conf version has been changed by this step
@@ -252,6 +253,10 @@ func (rp RemovePeer) Influence(opInfluence OpInfluence, region *core.RegionInfo)
 	regionSize := region.GetApproximateSize()
 	from.RegionSize -= regionSize
 	from.RegionCount--
+
+	if rp.IsDownStore && regionSize > storelimit.SmallRegionThreshold {
+		regionSize = storelimit.SmallRegionThreshold
+	}
 	from.AdjustStepCost(storelimit.RemovePeer, regionSize)
 }
 

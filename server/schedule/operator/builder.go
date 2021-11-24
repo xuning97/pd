@@ -341,7 +341,13 @@ func (b *Builder) execAddPeer(p *metapb.Peer) {
 }
 
 func (b *Builder) execRemovePeer(p *metapb.Peer) {
-	b.steps = append(b.steps, RemovePeer{FromStore: p.GetStoreId()})
+	removeStoreID := p.GetStoreId()
+	var isDownStore bool
+	store := b.cluster.GetStore(removeStoreID)
+	if store != nil {
+		isDownStore = store.DownTime() > b.cluster.GetMaxStoreDownTime()
+	}
+	b.steps = append(b.steps, RemovePeer{FromStore: removeStoreID, IsDownStore: isDownStore})
 	b.currentPeers.Delete(p.GetStoreId())
 	b.toRemove.Delete(p.GetStoreId())
 }
