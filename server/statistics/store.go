@@ -285,7 +285,7 @@ func (s *StoresStats) GetStoresKeysReadStat() map[uint64]float64 {
 
 func (s *StoresStats) storeIsUnhealthy(cluster core.StoreSetInformer, storeID uint64) bool {
 	store := cluster.GetStore(storeID)
-	return store.IsTombstone() || store.IsUnhealth()
+	return store == nil || store.IsTombstone() || store.IsUnhealth()
 }
 
 // FilterUnhealthyStore filter unhealthy store
