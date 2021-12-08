@@ -181,20 +181,24 @@ func (f *hotPeerCache) CheckRegionFlow(region *core.RegionInfo) (ret []*HotPeerS
 			thresholds:         thresholds,
 		}
 
+		source := direct
 		if oldItem == nil {
 			if tmpItem != nil { // use the tmpItem cached from the store where this region was in before
 				oldItem = tmpItem
+				source = inherit
+				tmpItem = nil
 			} else { // new item is new peer after adding replica
 				for _, storeID := range storeIDs {
 					oldItem = f.getOldHotPeerStat(region.GetID(), storeID)
 					if oldItem != nil {
+						source = adopt
 						break
 					}
 				}
 			}
 		}
 
-		newItem = f.updateHotPeerStat(newItem, oldItem, bytes, keys, time.Duration(interval)*time.Second)
+		newItem = f.updateHotPeerStat(newItem, oldItem, source, bytes, keys, time.Duration(interval)*time.Second)
 		if newItem != nil {
 			ret = append(ret, newItem)
 		}
@@ -378,7 +382,7 @@ func (f *hotPeerCache) getDefaultTimeMedian() *movingaverage.TimeMedian {
 	return movingaverage.NewTimeMedian(DefaultAotSize, rollingWindowsSize, RegionHeartBeatReportInterval*time.Second)
 }
 
-func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, bytes, keys float64, interval time.Duration) *HotPeerStat {
+func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, source sourceKind, bytes, keys float64, interval time.Duration) *HotPeerStat {
 	if newItem.needDelete {
 		return newItem
 	}
@@ -406,8 +410,13 @@ func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, bytes, k
 		return newItem
 	}
 
-	newItem.rollingByteRate = oldItem.rollingByteRate
-	newItem.rollingKeyRate = oldItem.rollingKeyRate
+	if source == adopt {
+		newItem.rollingByteRate = oldItem.rollingByteRate.Clone()
+		newItem.rollingKeyRate = oldItem.rollingKeyRate.Clone()
+	} else {
+		newItem.rollingByteRate = oldItem.rollingByteRate
+		newItem.rollingKeyRate = oldItem.rollingKeyRate
+	}
 
 	if newItem.justTransferLeader {
 		// skip the first heartbeat flow statistic after transfer leader, because its statistics are calculated by the last leader in this store and are inaccurate
