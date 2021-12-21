@@ -15,6 +15,7 @@ package statistics
 
 import (
 	"math/rand"
+	"sort"
 	"testing"
 	"time"
 
@@ -64,6 +65,7 @@ const (
 	transferLeader operator = iota
 	movePeer
 	addReplica
+	removeReplica
 )
 
 type testCacheCase struct {
@@ -92,11 +94,11 @@ func testCache(c *C, t *testCacheCase) {
 		WriteFlow: 3, // all peers
 	}
 	cache := NewHotStoresStats(t.kind)
-	region := buildRegion(nil, nil, t.kind)
+	region := buildRegion(t.kind, 3, 60)
 	checkAndUpdate(c, cache, region, defaultSize[t.kind])
 	checkHit(c, cache, region, t.kind, false) // all peers are new
 
-	srcStore, region := schedule(t.operator, region, t.kind)
+	srcStore, region := schedule(c, t.operator, region, 10)
 	res := checkAndUpdate(c, cache, region, t.expect)
 	checkHit(c, cache, region, t.kind, true) // hit cache
 	if t.expect != defaultSize[t.kind] {
@@ -104,10 +106,28 @@ func testCache(c *C, t *testCacheCase) {
 	}
 }
 
-func checkAndUpdate(c *C, cache *hotPeerCache, region *core.RegionInfo, expect int) []*HotPeerStat {
+func checkAndUpdate(c *C, cache *hotPeerCache, region *core.RegionInfo, expect ...int) []*HotPeerStat {
 	res := cache.CheckRegionFlow(region)
-	c.Assert(res, HasLen, expect)
+	if len(expect) != 0 {
+		c.Assert(res, HasLen, expect[0])
+	}
 	for _, p := range res {
+		cache.Update(p)
+	}
+	return res
+}
+
+func checkAndUpdateSkipOne(c *C, cache *hotPeerCache, region *core.RegionInfo, expect ...int) []*HotPeerStat {
+	peers := region.GetPeers()
+	rand.Seed(time.Now().UnixNano())
+	rand.Shuffle(len(peers), func(i, j int) {
+		peers[i], peers[j] = peers[j], peers[i]
+	})
+	res := cache.CheckRegionFlow(region.Clone(core.SetPeers(peers[1:])))
+	if len(expect) != 0 {
+		c.Assert(res, HasLen, expect[0])
+	}
+	for _, p := range res[1:] {
 		cache.Update(p)
 	}
 	return res
@@ -127,6 +147,17 @@ func checkHit(c *C, cache *hotPeerCache, region *core.RegionInfo, kind FlowKind,
 	}
 }
 
+func checkIntervalSum(c *C, cache *hotPeerCache, region *core.RegionInfo, peerCount int) {
+	var intervalSums []int
+	for _, peer := range region.GetPeers() {
+		oldItem := cache.getOldHotPeerStat(region.GetID(), peer.StoreId)
+		intervalSums = append(intervalSums, int(oldItem.getIntervalSum()))
+	}
+	c.Assert(intervalSums, HasLen, peerCount)
+	sort.Ints(intervalSums)
+	c.Assert(intervalSums[0] != intervalSums[peerCount-1], IsTrue)
+}
+
 func checkNeedDelete(c *C, ret []*HotPeerStat, storeID uint64) {
 	for _, item := range ret {
 		if item.StoreID == storeID {
@@ -136,21 +167,32 @@ func checkNeedDelete(c *C, ret []*HotPeerStat, storeID uint64) {
 	}
 }
 
-func schedule(operator operator, region *core.RegionInfo, kind FlowKind) (srcStore uint64, _ *core.RegionInfo) {
+func schedule(c *C, operator operator, region *core.RegionInfo, targets ...uint64) (srcStore uint64, _ *core.RegionInfo) {
 	switch operator {
 	case transferLeader:
 		_, newLeader := pickFollower(region)
-		return region.GetLeader().StoreId, buildRegion(region.GetMeta(), newLeader, kind)
+		return region.GetLeader().StoreId, region.Clone(core.WithLeader(newLeader))
 	case movePeer:
+		c.Assert(targets, HasLen, 1)
 		index, _ := pickFollower(region)
-		meta := region.GetMeta()
-		srcStore := meta.Peers[index].StoreId
-		meta.Peers[index] = &metapb.Peer{Id: 4, StoreId: 4}
-		return srcStore, buildRegion(meta, region.GetLeader(), kind)
+		srcStore := region.GetPeers()[index].StoreId
+		region := region.Clone(core.WithAddPeer(&metapb.Peer{Id: targets[0]*10 + 1, StoreId: targets[0]}))
+		region = region.Clone(core.WithRemoveStorePeer(srcStore))
+		return srcStore, region
 	case addReplica:
-		meta := region.GetMeta()
-		meta.Peers = append(meta.Peers, &metapb.Peer{Id: 4, StoreId: 4})
-		return 0, buildRegion(meta, region.GetLeader(), kind)
+		c.Assert(targets, HasLen, 1)
+		region := region.Clone(core.WithAddPeer(&metapb.Peer{Id: targets[0]*10 + 1, StoreId: targets[0]}))
+		return 0, region
+	case removeReplica:
+		if len(targets) == 0 {
+			index, _ := pickFollower(region)
+			srcStore = region.GetPeers()[index].StoreId
+		} else {
+			srcStore = targets[0]
+		}
+		region = region.Clone(core.WithRemoveStorePeer(srcStore))
+		return srcStore, region
+
 	default:
 		return 0, nil
 	}
@@ -172,30 +214,37 @@ func pickFollower(region *core.RegionInfo) (index int, peer *metapb.Peer) {
 	return dst, meta.Peers[dst]
 }
 
-func buildRegion(meta *metapb.Region, leader *metapb.Peer, kind FlowKind) *core.RegionInfo {
-	const interval = uint64(60)
-	if meta == nil {
-		peer1 := &metapb.Peer{Id: 1, StoreId: 1}
-		peer2 := &metapb.Peer{Id: 2, StoreId: 2}
-		peer3 := &metapb.Peer{Id: 3, StoreId: 3}
-
-		meta = &metapb.Region{
-			Id:          1000,
-			Peers:       []*metapb.Peer{peer1, peer2, peer3},
-			StartKey:    []byte(""),
-			EndKey:      []byte(""),
-			RegionEpoch: &metapb.RegionEpoch{ConfVer: 6, Version: 6},
-		}
-		leader = meta.Peers[rand.Intn(3)]
+func buildRegion(kind FlowKind, peerCount int, interval uint64) *core.RegionInfo {
+	peers := newPeers(peerCount,
+		func(i int) uint64 { return uint64(10000 + i) },
+		func(i int) uint64 { return uint64(i) })
+	meta := &metapb.Region{
+		Id:          1000,
+		Peers:       peers,
+		StartKey:    []byte(""),
+		EndKey:      []byte(""),
+		RegionEpoch: &metapb.RegionEpoch{ConfVer: 6, Version: 6},
 	}
+
+	leader := meta.Peers[rand.Intn(3)]
 
 	switch kind {
 	case ReadFlow:
-		return core.NewRegionInfo(meta, leader, core.SetReportInterval(interval),
-			core.SetReadBytes(interval*100*1024))
+		return core.NewRegionInfo(
+			meta,
+			leader,
+			core.SetReportInterval(interval),
+			core.SetReadBytes(10*1024*1024*interval),
+			core.SetReadKeys(10*1024*1024*interval),
+		)
 	case WriteFlow:
-		return core.NewRegionInfo(meta, leader, core.SetReportInterval(interval),
-			core.SetWrittenBytes(interval*100*1024))
+		return core.NewRegionInfo(
+			meta,
+			leader,
+			core.SetReportInterval(interval),
+			core.SetWrittenBytes(10*1024*1024*interval),
+			core.SetWrittenKeys(10*1024*1024*interval),
+		)
 	default:
 		return nil
 	}
@@ -306,6 +355,75 @@ func (t *testHotPeerCache) testMetrics(c *C, interval, byteRate, expectThreshold
 			c.Assert(thresholds[byteDim], Equals, minThresholds[byteDim])
 		} else {
 			c.Assert(thresholds[byteDim], Equals, expectThreshold)
+		}
+	}
+}
+
+func (t *testHotPeerCache) TestRemoveFromCache(c *C) {
+	peerCount := 3
+	cache := NewHotStoresStats(WriteFlow)
+	region := buildRegion(WriteFlow, peerCount, 5)
+	// prepare
+	for i := 1; i <= 200; i++ {
+		checkAndUpdate(c, cache, region)
+	}
+	// make the interval sum of peers are different
+	checkAndUpdateSkipOne(c, cache, region)
+	checkIntervalSum(c, cache, region, peerCount)
+	// check whether cold cache is cleared
+	var isClear bool
+	region = region.Clone(core.SetWrittenBytes(0), core.SetWrittenKeys(0))
+	for i := 1; i <= 200; i++ {
+		checkAndUpdate(c, cache, region)
+		if len(cache.storesOfRegion[region.GetID()]) == 0 {
+			isClear = true
+			break
+		}
+	}
+	c.Assert(isClear, IsTrue)
+}
+
+func (t *testHotPeerCache) TestRemoveFromCacheRandom(c *C) {
+	peerCounts := []int{3, 5}
+	intervals := []uint64{120, 60, 10, 5}
+
+	for _, peerCount := range peerCounts {
+		for _, interval := range intervals {
+			cache := NewHotStoresStats(WriteFlow)
+			region := buildRegion(WriteFlow, peerCount, interval)
+
+			target := uint64(10)
+			movePeer := func() {
+				tmp := uint64(0)
+				tmp, region = schedule(c, removeReplica, region)
+				_, region = schedule(c, addReplica, region, target)
+				target = tmp
+			}
+			// prepare with random move peer to make the interval sum of peers are different
+			for i := 1; i <= 200; i++ {
+				if i%5 == 0 {
+					movePeer()
+				}
+				checkAndUpdate(c, cache, region)
+			}
+			if interval < RegionHeartBeatReportInterval {
+				checkIntervalSum(c, cache, region, peerCount)
+			}
+			c.Assert(cache.storesOfRegion[region.GetID()], HasLen, peerCount)
+			// check whether cold cache is cleared
+			var isClear bool
+			region = region.Clone(core.SetWrittenBytes(0), core.SetWrittenKeys(0))
+			for i := 1; i <= 200; i++ {
+				if i%5 == 0 {
+					movePeer()
+				}
+				checkAndUpdate(c, cache, region)
+				if len(cache.storesOfRegion[region.GetID()]) == 0 {
+					isClear = true
+					break
+				}
+			}
+			c.Assert(isClear, IsTrue)
 		}
 	}
 }

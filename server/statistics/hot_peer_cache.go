@@ -179,15 +179,19 @@ func (f *hotPeerCache) CheckRegionFlow(region *core.RegionInfo) (ret []*HotPeerS
 			interval:           interval,
 			peers:              peers,
 			thresholds:         thresholds,
+			source:             direct,
 		}
 
 		if oldItem == nil {
-			if tmpItem != nil { // use the tmpItem cached from the store where this region was in before
+			if tmpItem != nil && tmpItem.AntiCount > 0 { // use the tmpItem cached from the store where this region was in before
+				newItem.source = inherit
 				oldItem = tmpItem
+				tmpItem = nil
 			} else { // new item is new peer after adding replica
 				for _, storeID := range storeIDs {
 					oldItem = f.getOldHotPeerStat(region.GetID(), storeID)
-					if oldItem != nil {
+					if oldItem != nil && oldItem.allowAdopt {
+						newItem.source = adopt
 						break
 					}
 				}
@@ -394,6 +398,7 @@ func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, bytes, k
 		if interval.Seconds() >= RegionHeartBeatReportInterval {
 			newItem.HotDegree = 1
 			newItem.AntiCount = hotRegionAntiCount
+			newItem.allowAdopt = true
 		}
 		newItem.isNew = true
 		newItem.rollingByteRate = newDimStat(byteDim)
@@ -406,8 +411,15 @@ func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, bytes, k
 		return newItem
 	}
 
-	newItem.rollingByteRate = oldItem.rollingByteRate
-	newItem.rollingKeyRate = oldItem.rollingKeyRate
+	if newItem.source == adopt {
+		newItem.rollingByteRate = oldItem.rollingByteRate.Clone()
+		newItem.rollingKeyRate = oldItem.rollingKeyRate.Clone()
+		newItem.allowAdopt = false
+	} else {
+		newItem.rollingByteRate = oldItem.rollingByteRate
+		newItem.rollingKeyRate = oldItem.rollingKeyRate
+		newItem.allowAdopt = oldItem.allowAdopt
+	}
 
 	if newItem.justTransferLeader {
 		// skip the first heartbeat flow statistic after transfer leader, because its statistics are calculated by the last leader in this store and are inaccurate
@@ -431,6 +443,7 @@ func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, bytes, k
 			if newItem.isFullAndHot() {
 				newItem.HotDegree = 1
 				newItem.AntiCount = hotRegionAntiCount
+				newItem.allowAdopt = true
 			} else {
 				newItem.needDelete = true
 			}
@@ -438,11 +451,14 @@ func (f *hotPeerCache) updateHotPeerStat(newItem, oldItem *HotPeerStat, bytes, k
 			if newItem.isFullAndHot() {
 				newItem.HotDegree = oldItem.HotDegree + 1
 				newItem.AntiCount = hotRegionAntiCount
+				newItem.allowAdopt = true
 			} else {
 				newItem.HotDegree = oldItem.HotDegree - 1
 				newItem.AntiCount = oldItem.AntiCount - 1
 				if newItem.AntiCount <= 0 {
 					newItem.needDelete = true
+				} else {
+					newItem.allowAdopt = true
 				}
 			}
 		}
