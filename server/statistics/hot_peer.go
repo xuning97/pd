@@ -70,6 +70,14 @@ func (d *dimStat) Get() float64 {
 	return d.Rolling.Get()
 }
 
+func (d *dimStat) Clone() *dimStat {
+	return &dimStat{
+		typ:         d.typ,
+		Rolling:     d.Rolling.Clone(),
+		LastAverage: d.LastAverage.Clone(),
+	}
+}
+
 // HotPeerStat records each hot peer's statistics
 type HotPeerStat struct {
 	StoreID  uint64 `json:"store_id"`
@@ -101,6 +109,11 @@ type HotPeerStat struct {
 	// If the peer didn't been send by store heartbeat when it is already stored as hot peer stat,
 	// we will handle it as cold peer and mark the inCold flag
 	inCold bool
+	// source represents the statistics item source, such as direct, inherit.
+	source sourceKind
+	// If the item in storeA is just inherited from storeB,
+	// then other store, such as storeC, will be forbidden to inherit from storeA until the item in storeA is hot.
+	allowInherited bool
 }
 
 // ID returns region ID. Implementing TopNItem.
@@ -126,6 +139,8 @@ func (stat *HotPeerStat) Log(str string, level func(msg string, fields ...zap.Fi
 		zap.Int("hot-anti-count", stat.AntiCount),
 		zap.Bool("just-transfer-leader", stat.justTransferLeader),
 		zap.Bool("is-leader", stat.isLeader),
+		zap.String("source", stat.source.String()),
+		zap.Bool("allow-inherited", stat.allowInherited),
 		zap.Bool("need-delete", stat.IsNeedDelete()),
 		zap.String("type", stat.Kind.String()),
 		zap.Time("last-transfer-leader-time", stat.lastTransferLeaderTime))
@@ -202,4 +217,11 @@ func (stat *HotPeerStat) hotStatReportInterval() int {
 		return ReadReportInterval
 	}
 	return WriteReportInterval
+}
+
+func (stat *HotPeerStat) getIntervalSum() time.Duration {
+	if len(stat.rollingLoads) == 0 || stat.rollingLoads[0] == nil {
+		return 0
+	}
+	return stat.rollingLoads[0].LastAverage.GetIntervalSum()
 }
