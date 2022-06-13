@@ -136,6 +136,7 @@ func (s *regionTestSuite) TestRegion(c *C) {
 	c.Assert(json.Unmarshal(output, &regionsInfo), IsNil)
 	regions = leaderServer.GetStoreRegions(1)
 	pdctl.CheckRegionsInfo(c, regionsInfo, regions)
+	pdctl.CheckRegionsInfo(c, regionsInfo, []*core.RegionInfo{r1, r2, r3, r4})
 
 	// region topread [limit] command
 	args = []string{"-u", pdAddr, "region", "topread", "2"}
